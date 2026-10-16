@@ -1,0 +1,16 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Local SQLite Database & OS Artifacts
+paper_trading.db
+paper_trading.db-journal
+.DS_Store
+Thumbs.db

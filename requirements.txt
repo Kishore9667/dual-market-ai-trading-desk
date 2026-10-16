@@ -1,0 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch
+streamlit
+plotly
+yfinance
+feedparser
+transformers
+accelerate
+chronos-forecasting
+ollama
+pandas
+numpy
+scipy
+scikit-learn
+psutil

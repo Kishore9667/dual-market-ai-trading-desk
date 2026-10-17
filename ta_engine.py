@@ -42,13 +42,117 @@ def flatten_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def fetch_ohlcv(
+import time
+import urllib.parse
+import requests
+
+
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.headers.update(
+    {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+)
+
+
+def _fetch_yahoo_v8_direct(
     ticker: str,
     interval: str = "1d",
     period: str = "1y",
     prepost: bool = False,
 ) -> pd.DataFrame:
-    """Safely download and flatten OHLCV data from Yahoo Finance."""
+    """
+    Direct HTTP fallback against Yahoo Finance v8 chart JSON API (query1 & query2).
+    Immune to yfinance curl_cffi thread/crumb cache glitches inside Streamlit reruns.
+    """
+    encoded_ticker = urllib.parse.quote(ticker.strip())
+    params = {
+        "range": period,
+        "interval": interval,
+        "includePrePost": "true" if prepost else "false",
+        "events": "div,splits",
+    }
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        url = f"https://{host}/v8/finance/chart/{encoded_ticker}"
+        try:
+            resp = _HTTP_SESSION.get(url, params=params, timeout=8)
+            if resp.status_code != 200:
+                continue
+            payload = resp.json()
+            result_list = (payload.get("chart") or {}).get("result")
+            if not result_list:
+                continue
+            res = result_list[0]
+            timestamps = res.get("timestamp") or []
+            indicators = res.get("indicators") or {}
+            quote_list = indicators.get("quote") or []
+            if not timestamps or not quote_list:
+                continue
+            q = quote_list[0]
+            tz_name = (res.get("meta") or {}).get("exchangeTimezoneName") or "UTC"
+            dt_idx = pd.to_datetime(timestamps, unit="s", utc=True)
+            try:
+                dt_idx = dt_idx.tz_convert(tz_name)
+            except Exception:
+                pass
+
+            df = pd.DataFrame(
+                {
+                    "Open": q.get("open", [np.nan] * len(timestamps)),
+                    "High": q.get("high", [np.nan] * len(timestamps)),
+                    "Low": q.get("low", [np.nan] * len(timestamps)),
+                    "Close": q.get("close", [np.nan] * len(timestamps)),
+                    "Volume": q.get("volume", [0.0] * len(timestamps)),
+                },
+                index=dt_idx,
+            )
+            df.index.name = "Date"
+            # Apply split/dividend adjustment ratio on daily/weekly bars if adjclose is present
+            adj_list = indicators.get("adjclose") or []
+            if adj_list and interval in ("1d", "1wk") and "adjclose" in adj_list[0]:
+                adj_close = pd.Series(adj_list[0]["adjclose"], index=dt_idx, dtype="float64")
+                raw_close = pd.to_numeric(df["Close"], errors="coerce")
+                ratio = (adj_close / raw_close.replace(0.0, np.nan)).fillna(1.0)
+                for col in ("Open", "High", "Low", "Close"):
+                    df[col] = pd.to_numeric(df[col], errors="coerce") * ratio
+
+            df = flatten_ohlcv(df)
+            if not df.empty:
+                return df
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def _fetch_single_symbol_ohlcv(
+    ticker: str,
+    interval: str = "1d",
+    period: str = "1y",
+    prepost: bool = False,
+) -> pd.DataFrame:
+    """Attempt v8 direct API first, then yf.Ticker.history, then yf.download."""
+    # Layer 1: Direct Yahoo v8 JSON endpoint (fast, thread-safe in Streamlit)
+    df = _fetch_yahoo_v8_direct(ticker, interval=interval, period=period, prepost=prepost)
+    if not df.empty:
+        return df
+
+    # Layer 2: yf.Ticker(ticker).history
+    try:
+        t_obj = yf.Ticker(ticker)
+        df = t_obj.history(period=period, interval=interval, prepost=prepost, auto_adjust=True)
+        df = flatten_ohlcv(df)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+
+    # Layer 3: yf.download
     try:
         df = yf.download(
             ticker,
@@ -60,13 +164,44 @@ def fetch_ohlcv(
             threads=False,
         )
         df = flatten_ohlcv(df)
-        if df.empty:
-            t_obj = yf.Ticker(ticker)
-            df = t_obj.history(period=period, interval=interval, prepost=prepost, auto_adjust=True)
-            df = flatten_ohlcv(df)
-        return df
+        if not df.empty:
+            return df
     except Exception:
+        pass
+
+    return pd.DataFrame()
+
+
+def fetch_ohlcv(
+    ticker: str,
+    interval: str = "1d",
+    period: str = "1y",
+    prepost: bool = False,
+) -> pd.DataFrame:
+    """
+    Safely download and flatten OHLCV data from Yahoo Finance with multi-host retry
+    and automatic NSE (.NS) <-> BSE (.BO) exchange fallback for Indian tickers.
+    """
+    if not ticker or not str(ticker).strip():
         return pd.DataFrame()
+
+    clean_t = str(ticker).strip().upper()
+    candidates = [clean_t]
+    if clean_t.endswith(".NS"):
+        candidates.append(clean_t[:-3] + ".BO")
+    elif clean_t.endswith(".BO"):
+        candidates.append(clean_t[:-3] + ".NS")
+
+    for attempt in range(2):
+        for sym in candidates:
+            df = _fetch_single_symbol_ohlcv(sym, interval=interval, period=period, prepost=prepost)
+            if not df.empty:
+                return df
+        if attempt == 0:
+            time.sleep(0.25)
+
+    return pd.DataFrame()
+
 
 
 def _native_rsi(close: pd.Series, period: int = 14) -> pd.Series:

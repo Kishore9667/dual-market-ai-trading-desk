@@ -208,27 +208,37 @@ def get_saved_watchlist(market_code: Optional[str] = None) -> List[Dict[str, Any
     return rows
 
 
+_WATCHLIST_QUOTE_CACHE: Dict[str, Tuple[float, float]] = {}
+
+
 def get_watchlist_live_quote(ticker: str, fallback_price: float) -> Tuple[float, float]:
     """
     Fetch fast latest price for a saved watchlist item and compute % gain/loss since price_at_add.
+    Uses a 180-second in-memory TTL cache and thread-safe fetch_ohlcv so sidebar reruns are instant.
     Returns (live_price, pct_gain_since_add).
     """
+    import time
+
     live_p = float(fallback_price or 0.0)
-    try:
-        t_obj = yf.Ticker(ticker)
-        fast_info = getattr(t_obj, "fast_info", None)
-        if fast_info and getattr(fast_info, "last_price", None):
-            live_p = float(fast_info.last_price)
-        else:
-            df = fetch_ohlcv(ticker, interval="1d", period="5d")
+    t_key = str(ticker).strip().upper()
+    now_ts = time.time()
+
+    cached = _WATCHLIST_QUOTE_CACHE.get(t_key)
+    if cached and (now_ts - cached[0] < 180.0) and cached[1] > 0:
+        live_p = cached[1]
+    else:
+        try:
+            df = fetch_ohlcv(t_key, interval="1d", period="5d")
             if not df.empty:
                 live_p = float(df["Close"].iloc[-1])
-    except Exception:
-        pass
+                _WATCHLIST_QUOTE_CACHE[t_key] = (now_ts, live_p)
+        except Exception:
+            pass
 
     base_p = float(fallback_price or live_p)
     pct_gain = (((live_p - base_p) / base_p) * 100.0) if base_p > 0 else 0.0
     return round(live_p, 2), round(pct_gain, 2)
+
 
 
 # =====================================================================

@@ -305,7 +305,7 @@ with st.sidebar:
 # CORE DATA PIPELINE EXECUTION (STEP 1 OF SMART GPU RELAY)
 # =====================================================================
 @st.cache_data(ttl=180, show_spinner=False)
-def load_and_compute_technical_bundle(
+def _cached_technical_bundle(
     ticker: str,
     benchmark: str,
     interval: str,
@@ -326,6 +326,28 @@ def load_and_compute_technical_bundle(
         "earnings": earn_data,
         "ta_summary": ta_sum,
     }
+
+
+def load_and_compute_technical_bundle(
+    ticker: str,
+    benchmark: str,
+    interval: str,
+    period: str,
+    prepost: bool,
+    currency_symbol: str,
+) -> Dict[str, Any]:
+    """Load technical bundle and automatically evict + retry if an empty DataFrame was ever cached."""
+    bundle = _cached_technical_bundle(
+        ticker, benchmark, interval, period, prepost, currency_symbol
+    )
+    if bundle["df"].empty:
+        _cached_technical_bundle.clear()
+        bundle = _cached_technical_bundle(
+            ticker, benchmark, interval, period, prepost, currency_symbol
+        )
+        if bundle["df"].empty:
+            _cached_technical_bundle.clear()
+    return bundle
 
 
 with st.spinner(f"Running Smart GPU Relay Pipeline on {active_ticker} ({m_code} • {interval})..."):
@@ -377,9 +399,22 @@ st.markdown(
 if df_ind.empty:
     st.error(
         f"Could not retrieve historical OHLCV data for `{active_ticker}` ({interval}, {period}). "
-        "Please verify the ticker symbol or choose a ticker from the Quick Watchlist in the sidebar."
+        "Please verify the ticker symbol or click Retry below."
     )
+    rc1, rc2, _ = st.columns([1, 1, 2])
+    with rc1:
+        if st.button("🔄 Clear Cache & Retry Fetch", type="primary", use_container_width=True):
+            _cached_technical_bundle.clear()
+            st.cache_data.clear()
+            st.rerun()
+    with rc2:
+        default_sym = market_cfg["watchlist"][0]
+        if st.button(f"🎯 Reset to {default_sym}", use_container_width=True):
+            _cached_technical_bundle.clear()
+            st.session_state[active_key] = default_sym
+            st.rerun()
     st.stop()
+
 
 
 # =====================================================================

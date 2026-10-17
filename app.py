@@ -49,6 +49,7 @@ from discovery_scanner import (
     stream_top3_discovery_summary,
     run_valuable_underdog_scan,
     stream_underdog_qwen_thesis,
+    DISCOVERY_LENSES,
 )
 from db_ledger import (
     init_db,
@@ -108,6 +109,15 @@ if "underdog_thesis" not in st.session_state:
     st.session_state["underdog_thesis"] = {}
 if "prefill_trade" not in st.session_state:
     st.session_state["prefill_trade"] = None
+if "seen_bluechip_tickers" not in st.session_state:
+    st.session_state["seen_bluechip_tickers"] = {"US": [], "IN": []}
+if "seen_underdog_tickers" not in st.session_state:
+    st.session_state["seen_underdog_tickers"] = {"US": [], "IN": []}
+if "bc_batch_offset" not in st.session_state:
+    st.session_state["bc_batch_offset"] = {"US": 0, "IN": 0}
+if "ud_batch_offset" not in st.session_state:
+    st.session_state["ud_batch_offset"] = {"US": 0, "IN": 0}
+
 
 
 # =====================================================================
@@ -218,6 +228,28 @@ with st.sidebar:
     st.session_state[active_key] = active_ticker
     if m_code == "IN" and raw_ticker_input.strip().upper() != active_ticker:
         st.caption(f"✅ Normalized `{raw_ticker_input.strip().upper()}` → **`{active_ticker}`**")
+
+    if st.button(
+        f"⭐ Add {active_ticker} to Underdog Watchlist",
+        use_container_width=True,
+        key=f"sb_add_wl_{m_code}_{active_ticker}",
+    ):
+        live_px, _ = get_watchlist_live_quote(active_ticker, 0.0)
+        ok_sb, msg_sb = add_to_saved_watchlist(
+            market=m_code,
+            ticker=active_ticker,
+            company_name=active_ticker,
+            category="Underdog Gem",
+            price_at_add=live_px,
+            target_price=round(live_px * 1.15, 2) if live_px > 0 else 0.0,
+            underdog_score=75.0,
+            pe_forward=0.0,
+            rev_growth_pct=0.0,
+            catalyst_note="Added directly from Sidebar",
+        )
+        if ok_sb:
+            st.toast(msg_sb)
+            st.rerun()
 
     # 3. Chart Interval & Automatic Yahoo Finance Lookback Caps
     col_int, col_per = st.columns(2)
@@ -876,8 +908,27 @@ with tab4:
             f"Price ≥ `{curr}{min_price_val:,.2f}`, Avg Vol ≥ `{min_vol_val:,}`, Analysts ≥ `{min_analysts_val}`"
         )
 
+        bc_rot_c1, bc_rot_c2 = st.columns([2.2, 1.0])
+        with bc_rot_c1:
+            bc_fresh_only = st.toggle(
+                "🔄 Fresh Stocks Every Scan (Exclude Previously Shown Blue-Chips)",
+                value=True,
+                key=f"bc_fresh_{m_code}",
+                help="Automatically skips previously scanned tickers and rotates the live Yahoo EquityQuery screener offset + 70-stock pool on every click.",
+            )
+        with bc_rot_c2:
+            seen_bc_count = len(st.session_state["seen_bluechip_tickers"].get(m_code, []))
+            if st.button(
+                f"♻️ Reset Seen History ({seen_bc_count} seen)",
+                use_container_width=True,
+                key=f"bc_reset_seen_{m_code}",
+            ):
+                st.session_state["seen_bluechip_tickers"][m_code] = []
+                st.session_state["bc_batch_offset"][m_code] = 0
+                st.rerun()
+
         scan_btn = st.button(
-            f"🚀 Scan Internet & Institutional Feeds for Trusted {m_code} Blue-Chip Picks",
+            f"🚀 Scan Internet & Institutional Feeds for Fresh {m_code} Blue-Chip Picks",
             type="primary",
             use_container_width=True,
             key=f"bc_scan_btn_{m_code}",
@@ -888,6 +939,9 @@ with tab4:
 
             def _update_prog(p: float, txt: str):
                 prog_bar.progress(min(1.0, max(0.0, p)), text=txt)
+
+            curr_bc_offset = int(st.session_state["bc_batch_offset"].get(m_code, 0))
+            excl_bc = st.session_state["seen_bluechip_tickers"].get(m_code, []) if bc_fresh_only else []
 
             scan_out = run_institutional_discovery_scan(
                 market_cfg=market_cfg,
@@ -901,8 +955,14 @@ with tab4:
                 relay_mode=relay_mode,
                 selected_llm=selected_llm,
                 progress_callback=_update_prog,
+                exclude_tickers=excl_bc,
+                batch_offset=curr_bc_offset,
             )
             st.session_state["discovery_results"][m_code] = scan_out
+            st.session_state["bc_batch_offset"][m_code] = curr_bc_offset + 1
+            for s_sym in scan_out.get("scanned_candidates", []):
+                if s_sym not in st.session_state["seen_bluechip_tickers"][m_code]:
+                    st.session_state["seen_bluechip_tickers"][m_code].append(s_sym)
 
             if scan_out["survivors"]:
                 st.markdown(f"#### 🏆 `{selected_llm}` Executive Summary of Top 3 Blue-Chip Picks")
@@ -1012,8 +1072,8 @@ with tab4:
         st.markdown("##### 🚀 Valuable Underdogs — Undervalued Mid-Cap Growth & GARP Scanner")
         st.caption(
             "Engineered to uncover high-growth, fundamentally undervalued mid-cap stocks before they become crowded mega-caps. "
-            "Combines Trusted Financial Media RSS (Barron's/Reuters/Zacks/Nasdaq & ET/Moneycontrol/Mint/Business Standard), "
-            "`yfinance` Mid-Cap Growth Screeners, and a 4-Pillar 0–100 GARP + Coiled-Spring Technical Score."
+            "Combines Live Yahoo Finance `EquityQuery` Screeners (US & India), Trusted Financial Media RSS, "
+            "an 80+ Multi-Sector Mid-Cap Pool, and a 4-Pillar 0–100 GARP + Coiled-Spring Technical Score."
         )
 
         # Adjustable Underdog Sweet-Spot Controls adapting to US vs India
@@ -1086,6 +1146,35 @@ with tab4:
                 key=f"ud_lim_{m_code}",
             )
 
+        # Discovery Lens + Anti-Repeat Rotation Controls
+        ud_lens_c1, ud_lens_c2, ud_lens_c3 = st.columns([1.8, 1.4, 0.9])
+        with ud_lens_c1:
+            ud_lens = st.selectbox(
+                "🎯 Live Discovery Lens & Screener Strategy",
+                options=DISCOVERY_LENSES,
+                index=0,
+                key=f"ud_lens_{m_code}",
+            )
+        with ud_lens_c2:
+            st.write("")
+            ud_fresh_only = st.toggle(
+                "🔄 Fresh Stocks Every Scan (Exclude Seen)",
+                value=True,
+                key=f"ud_fresh_{m_code}",
+                help="Ensures every click on Scan pulls a brand-new set of mid-cap stocks by excluding previously scanned tickers and advancing the live Yahoo EquityQuery screener offset.",
+            )
+        with ud_lens_c3:
+            st.write("")
+            seen_ud_count = len(st.session_state["seen_underdog_tickers"].get(m_code, []))
+            if st.button(
+                f"♻️ Reset History ({seen_ud_count})",
+                use_container_width=True,
+                key=f"ud_reset_seen_{m_code}",
+            ):
+                st.session_state["seen_underdog_tickers"][m_code] = []
+                st.session_state["ud_batch_offset"][m_code] = 0
+                st.rerun()
+
         mcap_str = (
             f"₹{ud_mcap_range[0]:,} Cr – ₹{ud_mcap_range[1]:,} Cr"
             if m_code == "IN"
@@ -1094,11 +1183,12 @@ with tab4:
         st.caption(
             f"**Active Underdog Sweet-Spot ({m_code}):** Market Cap `{mcap_str}` • "
             f"Min Price `{curr}{ud_min_price:,.2f}` • Min Vol `{ud_min_vol:,}` • "
-            f"YoY Growth ≥ `{ud_min_growth:.0f}%` • Forward P/E ≤ `{ud_max_fpe:.1f}x`"
+            f"YoY Growth ≥ `{ud_min_growth:.0f}%` • Forward P/E ≤ `{ud_max_fpe:.1f}x` • "
+            f"Unique Mid-Caps Explored This Session: `{seen_ud_count}`"
         )
 
         ud_scan_btn = st.button(
-            f"🚀 Scan for Valuable {m_code} Underdogs (Mid-Cap GARP & Coiled Springs)",
+            f"🚀 Scan for Fresh Valuable {m_code} Underdogs (Next Batch — Live Screener + GARP Pool)",
             type="primary",
             use_container_width=True,
             key=f"ud_scan_btn_{m_code}",
@@ -1109,6 +1199,9 @@ with tab4:
 
             def _update_ud_prog(p: float, txt: str):
                 ud_prog.progress(min(1.0, max(0.0, p)), text=txt)
+
+            curr_ud_offset = int(st.session_state["ud_batch_offset"].get(m_code, 0))
+            excl_ud = st.session_state["seen_underdog_tickers"].get(m_code, []) if ud_fresh_only else []
 
             ud_out = run_valuable_underdog_scan(
                 market_cfg=market_cfg,
@@ -1123,8 +1216,16 @@ with tab4:
                 relay_mode=relay_mode,
                 selected_llm=selected_llm,
                 progress_callback=_update_ud_prog,
+                exclude_tickers=excl_ud,
+                batch_offset=curr_ud_offset,
+                discovery_lens=ud_lens,
             )
             st.session_state["underdog_results"][m_code] = ud_out
+            st.session_state["ud_batch_offset"][m_code] = curr_ud_offset + 1
+            for u_sym in ud_out.get("scanned_candidates", []):
+                if u_sym not in st.session_state["seen_underdog_tickers"][m_code]:
+                    st.session_state["seen_underdog_tickers"][m_code].append(u_sym)
+
 
         saved_ud = st.session_state["underdog_results"].get(m_code)
         if saved_ud:

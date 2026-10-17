@@ -125,6 +125,127 @@ INDIA_NAME_TO_TICKER = {
 }
 
 
+import random
+import requests
+
+
+DISCOVERY_LENSES = [
+    "🔥 All Live Sources (Yahoo EquityQuery + Media RSS + Multi-Sector Pool)",
+    "📈 Top Intraday Momentum (Live Screener Sorted by % Gain)",
+    "📊 High Institutional Volume (Live Screener Sorted by Volume)",
+    "💎 Pure GARP & Coiled Springs (Randomized Multi-Sector Rotation)",
+]
+
+
+def _normalize_discovered_sym(sym: str, market_code: str, indian_suffix: str = ".NS") -> Optional[str]:
+    """Normalize a raw symbol from Yahoo screeners/search into a valid US or Indian equity ticker."""
+    if not sym:
+        return None
+    s = str(sym).strip().upper()
+    if market_code == "IN":
+        if s.endswith(".NS") or s.endswith(".BO"):
+            base = clean_indian_ticker(s)
+            if base and base.isalnum():
+                return f"{base}{indian_suffix}"
+        return None
+    else:
+        if s.isalpha() and 1 <= len(s) <= 5 and not (len(s) == 5 and s.endswith("X")):
+            return s
+        return None
+
+
+def _query_yahoo_equity_screener(
+    market_code: str,
+    min_mcap_raw: float,
+    max_mcap_raw: Optional[float],
+    min_price: float,
+    min_avg_volume: int,
+    indian_suffix: str = ".NS",
+    sort_field: str = "percentchange",
+    offset: int = 0,
+    size: int = 35,
+) -> List[str]:
+    """
+    Query Yahoo Finance's live institutional EquityQuery screener for US ('us') or India ('in')
+    using the exact Market Cap, Price, and Volume bounds, with dynamic pagination offset.
+    """
+    out: List[str] = []
+    try:
+        from yfinance import EquityQuery
+
+        region_code = "in" if market_code == "IN" else "us"
+        filters = [
+            EquityQuery("eq", ["region", region_code]),
+            EquityQuery("gt", ["intradayprice", float(max(1.0, min_price))]),
+            EquityQuery("gt", ["dayvolume", int(max(10000, min_avg_volume))]),
+        ]
+        if max_mcap_raw is not None and max_mcap_raw > min_mcap_raw:
+            filters.append(
+                EquityQuery("btwn", ["intradaymarketcap", float(min_mcap_raw), float(max_mcap_raw)])
+            )
+        else:
+            filters.append(EquityQuery("gt", ["intradaymarketcap", float(min_mcap_raw)]))
+
+        eq_query = EquityQuery("and", filters)
+        scr_res = yf.screen(
+            eq_query,
+            size=min(50, max(15, size)),
+            offset=max(0, int(offset)),
+            sortField=sort_field,
+            sortAsc=False,
+        )
+        quotes = scr_res.get("quotes", []) if isinstance(scr_res, dict) else []
+        for q_item in quotes:
+            norm_s = _normalize_discovered_sym(q_item.get("symbol", ""), market_code, indian_suffix)
+            if norm_s and norm_s not in out:
+                out.append(norm_s)
+    except Exception:
+        pass
+    return out
+
+
+def _query_yahoo_live_search(
+    query_str: str,
+    market_code: str = "US",
+    indian_suffix: str = ".NS",
+) -> Tuple[List[str], List[str]]:
+    """
+    Query Yahoo Finance /v1/finance/search for live breaking news headlines,
+    relatedTickers attached to news articles, and matching equity symbols.
+    """
+    tickers: List[str] = []
+    headlines: List[str] = []
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search"
+        params = {"q": query_str, "quotesCount": 15, "newsCount": 10}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            data = resp.json()
+            for q_item in data.get("quotes", []) or []:
+                if str(q_item.get("quoteType", "")).upper() != "EQUITY":
+                    continue
+                norm_s = _normalize_discovered_sym(q_item.get("symbol", ""), market_code, indian_suffix)
+                if norm_s and norm_s not in tickers:
+                    tickers.append(norm_s)
+            for n_item in data.get("news", []) or []:
+                title = n_item.get("title", "")
+                if title:
+                    headlines.append(title)
+                for rel_t in n_item.get("relatedTickers", []) or []:
+                    norm_s = _normalize_discovered_sym(rel_t, market_code, indian_suffix)
+                    if norm_s and norm_s not in tickers:
+                        tickers.append(norm_s)
+    except Exception:
+        pass
+    return tickers, headlines
+
+
 # =====================================================================
 # SUB-TAB 4A: INSTITUTIONAL BLUE-CHIP MOVERS ENGINE
 # =====================================================================
@@ -132,12 +253,20 @@ def harvest_catalyst_candidates(
     market_code: str = "US",
     indian_suffix: str = ".NS",
     max_candidates: int = 12,
+    min_mcap_raw: Optional[float] = None,
+    min_price: float = 20.0,
+    min_avg_volume: int = 1000000,
+    exclude_tickers: Optional[List[str]] = None,
+    batch_offset: int = 0,
 ) -> Tuple[List[str], List[str]]:
     """
-    Stage 1 (Blue-Chip): Harvest candidate tickers from live Google News RSS catalyst feeds,
-    yfinance screeners (for US), and curated S&P 500 / Nifty 50 liquid universes.
+    Stage 1 (Blue-Chip): Harvest candidate tickers from:
+      1) Live Yahoo Finance EquityQuery Screener (for both US and India) with rotating offset & sortField
+      2) Live Google News RSS + Yahoo Finance News/Search relatedTickers
+      3) Expanded 60+ stock S&P 500 / Nifty 100 universe (shuffled & filtered by exclude_tickers)
     """
-    discovered_from_rss: List[str] = []
+    excl_set = {t.strip().upper() for t in (exclude_tickers or []) if t}
+    discovered_live: List[str] = []
     catalyst_headlines: List[str] = []
 
     queries = INDIA_CATALYST_QUERIES if market_code == "IN" else US_CATALYST_QUERIES
@@ -148,7 +277,35 @@ def harvest_catalyst_candidates(
     else:
         universe = list(base_universe)
 
+    # 1. Live Yahoo Finance Custom EquityQuery Screener (US & India)
+    eff_mcap = min_mcap_raw if min_mcap_raw is not None else (20000 * 1e7 if market_code == "IN" else 10.0 * 1e9)
+    sort_fields = ["percentchange", "dayvolume", "intradaymarketcap"]
+    chosen_sort = sort_fields[batch_offset % len(sort_fields)]
+    eq_hits = _query_yahoo_equity_screener(
+        market_code=market_code,
+        min_mcap_raw=eff_mcap,
+        max_mcap_raw=None,
+        min_price=min_price,
+        min_avg_volume=min_avg_volume,
+        indian_suffix=indian_suffix,
+        sort_field=chosen_sort,
+        offset=(batch_offset * 12) % 60,
+        size=30,
+    )
+    for sym in eq_hits:
+        if sym not in excl_set and sym not in discovered_live:
+            discovered_live.append(sym)
+
+    # 2. Live Google News RSS + Yahoo Search relatedTickers
     for q in queries:
+        y_ticks, y_heads = _query_yahoo_live_search(q, market_code=market_code, indian_suffix=indian_suffix)
+        for h in y_heads:
+            if h not in catalyst_headlines:
+                catalyst_headlines.append(h)
+        for sym in y_ticks:
+            if sym not in excl_set and sym not in discovered_live:
+                discovered_live.append(sym)
+
         try:
             q_enc = urllib.parse.quote(q)
             if market_code == "IN":
@@ -160,40 +317,37 @@ def harvest_catalyst_candidates(
                 title = getattr(entry, "title", "")
                 if not title:
                     continue
-                catalyst_headlines.append(title)
+                if title not in catalyst_headlines:
+                    catalyst_headlines.append(title)
                 upper_t = title.upper()
                 if market_code == "IN":
                     for name_key, nse_sym in INDIA_NAME_TO_TICKER.items():
                         if name_key in upper_t:
                             sym = f"{clean_indian_ticker(nse_sym)}{indian_suffix}"
-                            if sym not in discovered_from_rss:
-                                discovered_from_rss.append(sym)
+                            if sym not in excl_set and sym not in discovered_live:
+                                discovered_live.append(sym)
                 else:
                     paren_matches = re.findall(r"\(([A-Z]{1,5})\)", upper_t)
                     for pm in paren_matches:
-                        if pm in universe and pm not in discovered_from_rss:
-                            discovered_from_rss.append(pm)
+                        if pm.isalpha() and pm not in excl_set and pm not in discovered_live:
+                            discovered_live.append(pm)
                     for u_sym in universe:
                         if re.search(rf"\b{re.escape(u_sym)}\b", upper_t):
-                            if u_sym not in discovered_from_rss:
-                                discovered_from_rss.append(u_sym)
+                            if u_sym not in excl_set and u_sym not in discovered_live:
+                                discovered_live.append(u_sym)
         except Exception:
             pass
 
-    if market_code == "US":
-        try:
-            if hasattr(yf, "screen"):
-                scr = yf.screen("day_gainers")
-                quotes = scr.get("quotes", []) if isinstance(scr, dict) else []
-                for q_item in quotes[:8]:
-                    sym = q_item.get("symbol", "")
-                    if sym and sym.isalpha() and len(sym) <= 5 and sym not in discovered_from_rss:
-                        discovered_from_rss.append(sym.upper())
-        except Exception:
-            pass
+    # 3. Shuffle Curated Multi-Sector Pool & Exclude Previously Seen Tickers
+    fresh_pool = [u for u in universe if u not in excl_set]
+    if not fresh_pool:
+        fresh_pool = list(universe)
+    rng = random.Random()
+    rng.shuffle(fresh_pool)
 
     combined: List[str] = []
-    for sym in discovered_from_rss + universe:
+    # Interleave live screener/RSS discoveries with shuffled multi-sector pool
+    for sym in discovered_live + fresh_pool:
         if sym not in combined:
             combined.append(sym)
         if len(combined) >= max_candidates:
@@ -214,6 +368,8 @@ def run_institutional_discovery_scan(
     relay_mode: str = "Smart GPU Relay - Best for RTX 3050 8GB + qwen2.5:14b",
     selected_llm: str = "qwen2.5:14b",
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    exclude_tickers: Optional[List[str]] = None,
+    batch_offset: int = 0,
 ) -> Dict[str, Any]:
     """
     Execute Sub-Tab 4A Institutional Blue-Chip Discovery Scan.
@@ -234,12 +390,18 @@ def run_institutional_discovery_scan(
     unload_ollama_from_vram(selected_llm)
 
     if progress_callback:
-        progress_callback(0.10, "Step 2/4: Harvesting live Google News RSS catalyst feeds & institutional universe...")
+        progress_callback(0.10, "Step 2/4: Harvesting live Yahoo EquityQuery screener, RSS feeds & rotating pool...")
     candidates, catalyst_headlines = harvest_catalyst_candidates(
         market_code=market_code,
         indian_suffix=indian_suffix,
         max_candidates=max_candidates,
+        min_mcap_raw=min_mcap_raw,
+        min_price=min_price,
+        min_avg_volume=min_avg_volume,
+        exclude_tickers=exclude_tickers,
+        batch_offset=batch_offset,
     )
+
 
     bench_df = fetch_ohlcv(bench_ticker, interval=interval, period="1y", prepost=False)
 
@@ -385,6 +547,7 @@ def run_institutional_discovery_scan(
         "survivors": survivors,
         "rejected": rejected_log,
         "catalyst_headlines": catalyst_headlines,
+        "scanned_candidates": candidates,
     }
 
 
@@ -454,14 +617,24 @@ def harvest_underdog_candidates(
     market_code: str = "US",
     indian_suffix: str = ".NS",
     max_candidates: int = 15,
+    min_mcap_raw: Optional[float] = None,
+    max_mcap_raw: Optional[float] = None,
+    min_price: float = 12.0,
+    min_avg_volume: int = 300000,
+    exclude_tickers: Optional[List[str]] = None,
+    batch_offset: int = 0,
+    discovery_lens: str = DISCOVERY_LENSES[0],
 ) -> Tuple[List[str], List[str]]:
     """
-    Step 1 of Sub-Tab 4B: Multi-Source Trusted Underdog Harvesting:
-      1) Trusted Financial Media RSS (Barron's, Reuters, Zacks, Nasdaq for US;
-         Economic Times, Moneycontrol, LiveMint, Business Standard for India)
-      2) yfinance predefined screeners ('undervalued_growth_stocks', 'small_cap_gainers')
-      3) Curated Liquid Mid-Cap Growth Universe (US_UNDERDOG_UNIVERSE / INDIA_UNDERDOG_UNIVERSE)
+    Step 1 of Sub-Tab 4B: Dynamic Multi-Source Trusted Underdog Harvesting:
+      1) Live Yahoo Finance Custom EquityQuery Screener (for both US 'us' & India 'in')
+         within the exact Sweet-Spot Market Cap Range, Min Price & Min Volume, with rotating offset & sortField
+      2) Trusted Financial Media RSS (Barron's, Reuters, Zacks, Nasdaq for US;
+         Economic Times, Moneycontrol, LiveMint, Business Standard for India) + Yahoo /v1/finance/search resolver
+      3) yfinance Predefined Mid-Cap Growth Screeners ('undervalued_growth_stocks', 'small_cap_gainers', 'growth_technology_stocks')
+      4) Shuffled 80+ Multi-Sector Mid-Cap Growth Universe (filtered by exclude_tickers so scans never repeat)
     """
+    excl_set = {t.strip().upper() for t in (exclude_tickers or []) if t}
     discovered_tickers: List[str] = []
     media_headlines: List[str] = []
 
@@ -469,12 +642,67 @@ def harvest_underdog_candidates(
     if market_code == "IN":
         universe = [f"{clean_indian_ticker(t)}{indian_suffix}" for t in base_universe]
         underdog_set = {clean_indian_ticker(t) for t in INDIA_UNDERDOG_UNIVERSE}
+        bluechip_set = {f"{clean_indian_ticker(t)}{indian_suffix}" for t in INDIA_DISCOVERY_UNIVERSE}
     else:
         universe = list(base_universe)
         underdog_set = set(US_UNDERDOG_UNIVERSE)
+        bluechip_set = set(US_DISCOVERY_UNIVERSE)
 
-    # Source 1: Trusted Financial Media RSS via feedparser
+    # Determine live EquityQuery sort field from discovery_lens + batch_offset
+    if "Momentum" in discovery_lens:
+        sort_field = "percentchange"
+    elif "Volume" in discovery_lens:
+        sort_field = "dayvolume"
+    else:
+        sort_cycle = ["percentchange", "dayvolume", "intradaymarketcap"]
+        sort_field = sort_cycle[batch_offset % len(sort_cycle)]
+
+    eff_min_mcap = min_mcap_raw if min_mcap_raw is not None else (3000 * 1e7 if market_code == "IN" else 1.5 * 1e9)
+    eff_max_mcap = max_mcap_raw if max_mcap_raw is not None else (35000 * 1e7 if market_code == "IN" else 15.0 * 1e9)
+
+    # Source 1: Live Yahoo Finance Custom EquityQuery Screener (US & India Mid-Cap Sweet-Spot)
+    if "Pure GARP" not in discovery_lens:
+        eq_candidates = _query_yahoo_equity_screener(
+            market_code=market_code,
+            min_mcap_raw=eff_min_mcap,
+            max_mcap_raw=eff_max_mcap,
+            min_price=min_price,
+            min_avg_volume=min_avg_volume,
+            indian_suffix=indian_suffix,
+            sort_field=sort_field,
+            offset=(batch_offset * 15) % 75,
+            size=35,
+        )
+        for sym in eq_candidates:
+            if (
+                sym not in excl_set
+                and sym not in COMMON_ETFS_AND_FUNDS
+                and sym not in bluechip_set
+                and sym not in discovered_tickers
+            ):
+                discovered_tickers.append(sym)
+
+    # Source 2: Trusted Financial Media RSS + Yahoo Finance /v1/finance/search Ticker Resolver
     rss_query = INDIA_UNDERDOG_RSS_QUERY if market_code == "IN" else US_UNDERDOG_RSS_QUERY
+    search_themes = (
+        ["NSE midcap growth stock", "India midcap earnings breakout", "Nifty midcap undervalued buy"]
+        if market_code == "IN"
+        else ["mid cap growth stock upgrade", "undervalued growth stock breakout", "Nasdaq midcap buy rating"]
+    )
+    theme_q = search_themes[batch_offset % len(search_themes)]
+    y_ticks, y_heads = _query_yahoo_live_search(theme_q, market_code=market_code, indian_suffix=indian_suffix)
+    for h in y_heads:
+        if h not in media_headlines:
+            media_headlines.append(h)
+    for sym in y_ticks:
+        if (
+            sym not in excl_set
+            and sym not in COMMON_ETFS_AND_FUNDS
+            and sym not in bluechip_set
+            and sym not in discovered_tickers
+        ):
+            discovered_tickers.append(sym)
+
     try:
         q_enc = urllib.parse.quote(rss_query)
         if market_code == "IN":
@@ -487,14 +715,15 @@ def harvest_underdog_candidates(
             title = getattr(entry, "title", "")
             if not title:
                 continue
-            media_headlines.append(title)
+            if title not in media_headlines:
+                media_headlines.append(title)
             upper_t = title.upper()
             if market_code == "IN":
                 for name_key, nse_sym in INDIA_NAME_TO_TICKER.items():
                     base_sym = clean_indian_ticker(nse_sym)
                     if base_sym in underdog_set and name_key in upper_t:
                         sym = f"{base_sym}{indian_suffix}"
-                        if sym not in discovered_tickers:
+                        if sym not in excl_set and sym not in discovered_tickers:
                             discovered_tickers.append(sym)
             else:
                 paren_matches = re.findall(r"\(([A-Z]{2,5})\)", upper_t)
@@ -503,25 +732,28 @@ def harvest_underdog_candidates(
                         pm.isalpha()
                         and pm not in COMMON_ETFS_AND_FUNDS
                         and not (len(pm) == 5 and pm.endswith("X"))
-                        and pm not in US_DISCOVERY_UNIVERSE
+                        and pm not in bluechip_set
+                        and pm not in excl_set
                         and pm not in discovered_tickers
                     ):
                         discovered_tickers.append(pm)
                 for u_sym in universe:
                     if re.search(rf"\b{re.escape(u_sym)}\b", upper_t):
-                        if u_sym not in discovered_tickers:
+                        if u_sym not in excl_set and u_sym not in discovered_tickers:
                             discovered_tickers.append(u_sym)
     except Exception:
         pass
 
-    # Source 2: yfinance Predefined & Mid-Cap Growth Screeners (wrapped safely in try/except)
-    if market_code == "US":
-        for scr_name in ("undervalued_growth_stocks", "small_cap_gainers"):
+    # Source 3: yfinance Predefined Mid-Cap Growth Screeners (US)
+    if market_code == "US" and "Pure GARP" not in discovery_lens:
+        for scr_name in ("undervalued_growth_stocks", "small_cap_gainers", "growth_technology_stocks"):
             try:
                 if hasattr(yf, "screen"):
                     scr = yf.screen(scr_name)
                     quotes = scr.get("quotes", []) if isinstance(scr, dict) else []
-                    for q_item in quotes[:8]:
+                    start_i = (batch_offset * 5) % max(1, len(quotes))
+                    rotated_quotes = quotes[start_i:] + quotes[:start_i]
+                    for q_item in rotated_quotes[:10]:
                         sym = str(q_item.get("symbol", "")).strip().upper()
                         if (
                             sym
@@ -529,22 +761,38 @@ def harvest_underdog_candidates(
                             and 2 <= len(sym) <= 5
                             and sym not in COMMON_ETFS_AND_FUNDS
                             and not (len(sym) == 5 and sym.endswith("X"))
-                            and sym not in US_DISCOVERY_UNIVERSE
+                            and sym not in bluechip_set
+                            and sym not in excl_set
                             and sym not in discovered_tickers
                         ):
                             discovered_tickers.append(sym)
             except Exception:
                 pass
 
-    # Source 3: Combine with Curated Liquid Mid-Cap Growth Universe
+    # Source 4: Shuffled 80+ Multi-Sector Mid-Cap Growth Universe (Excluding Previously Seen Tickers)
+    fresh_universe = [u for u in universe if u not in excl_set]
+    if not fresh_universe:
+        fresh_universe = list(universe)
+    rng = random.Random()
+    rng.shuffle(fresh_universe)
+
+    # Interleave live internet discoveries with shuffled multi-sector GARP gems so both live movers & curated GARP gems are evaluated
     combined: List[str] = []
-    for sym in discovered_tickers + universe:
+    if "Pure GARP" in discovery_lens:
+        source_stream = fresh_universe + discovered_tickers
+    else:
+        # Take up to half from live screener/RSS and half from shuffled multi-sector GARP pool
+        half_live = max(4, max_candidates // 2)
+        source_stream = discovered_tickers[:half_live] + fresh_universe + discovered_tickers[half_live:]
+
+    for sym in source_stream:
         if sym not in combined:
             combined.append(sym)
         if len(combined) >= max_candidates:
             break
 
     return combined[:max_candidates], media_headlines[:12]
+
 
 
 def calculate_underdog_garp_score(
@@ -692,11 +940,14 @@ def run_valuable_underdog_scan(
     relay_mode: str = "Smart GPU Relay - Best for RTX 3050 8GB + qwen2.5:14b",
     selected_llm: str = "qwen2.5:14b",
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    exclude_tickers: Optional[List[str]] = None,
+    batch_offset: int = 0,
+    discovery_lens: str = DISCOVERY_LENSES[0],
 ) -> Dict[str, Any]:
     """
     Execute Sub-Tab 4B 'Valuable Underdogs (Undervalued Mid-Cap Growth & GARP)' Scanner:
       a) Send unload ping to Ollama (keep_alive=0) so PyTorch has 100% of RTX 3050 VRAM.
-      b) Harvest candidates from Trusted Financial Media RSS, yfinance screeners, and Mid-Cap Growth universe.
+      b) Harvest candidates from live Yahoo EquityQuery screener, Trusted Financial Media RSS, and rotating Mid-Cap Growth universe.
       c) Filter candidates by Sweet-Spot Market Cap Range, Min Price, Min Volume, Growth & Forward P/E.
       d) Compute the 0-100 Underdog Value & Growth Score (underdog_score) + FinBERT + Chronos + 44-SMA setup.
     """
@@ -718,11 +969,18 @@ def run_valuable_underdog_scan(
     unload_ollama_from_vram(selected_llm)
 
     if progress_callback:
-        progress_callback(0.12, "Step 2/4: Harvesting Trusted Financial Media RSS, Screeners & Mid-Cap Growth Universe...")
+        progress_callback(0.12, "Step 2/4: Harvesting Live Yahoo EquityQuery Screener, Financial Media RSS & Rotating Mid-Cap Pool...")
     candidates, media_headlines = harvest_underdog_candidates(
         market_code=market_code,
         indian_suffix=indian_suffix,
         max_candidates=max_candidates,
+        min_mcap_raw=min_mcap_raw,
+        max_mcap_raw=max_mcap_raw,
+        min_price=min_price,
+        min_avg_volume=min_avg_volume,
+        exclude_tickers=exclude_tickers,
+        batch_offset=batch_offset,
+        discovery_lens=discovery_lens,
     )
 
     bench_df = fetch_ohlcv(bench_ticker, interval=interval, period="1y", prepost=False)
@@ -939,6 +1197,7 @@ def run_valuable_underdog_scan(
         "strict_count": len(strict_survivors),
         "rejected": rejected_log,
         "media_headlines": media_headlines,
+        "scanned_candidates": candidates,
     }
 
 

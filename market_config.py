@@ -27,7 +27,11 @@ INDIA_WATCHLIST = [
 US_DISCOVERY_UNIVERSE = [
     "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AVGO", "TSLA", "LLY", "JPM",
     "V", "UNH", "XOM", "MA", "COST", "HD", "PG", "NFLX", "AMD", "CRM",
-    "ORCL", "BAC", "ABBV", "CVX", "KO", "MRK", "WMT", "PEP", "TMO", "ACN"
+    "ORCL", "BAC", "ABBV", "CVX", "KO", "MRK", "WMT", "PEP", "TMO", "ACN",
+    "NOW", "PANW", "PLTR", "CRWD", "ANET", "ISRG", "UBER", "GE", "CAT", "ETN",
+    "GS", "MS", "AXP", "BLK", "AMAT", "LRCX", "KLAC", "MU", "TXN", "QCOM",
+    "VRTX", "REGN", "BSX", "SYK", "PGR", "TJX", "BKNG", "ADP", "SNPS", "CDNS",
+    "DELL", "VST", "CEG", "PWR", "URI", "PH", "TT", "CMG", "SPOT", "SHOP"
 ]
 
 INDIA_DISCOVERY_UNIVERSE = [
@@ -35,24 +39,56 @@ INDIA_DISCOVERY_UNIVERSE = [
     "SBIN.NS", "LT.NS", "ITC.NS", "HCLTECH.NS", "SUNPHARMA.NS", "BAJFINANCE.NS",
     "MARUTI.NS", "KOTAKBANK.NS", "M&M.NS", "ULTRACEMCO.NS", "AXISBANK.NS", "NTPC.NS",
     "TITAN.NS", "ADANIENT.NS", "TATASTEEL.NS", "POWERGRID.NS", "ASIANPAINT.NS", "WIPRO.NS",
-    "COALINDIA.NS", "BAJAJFINSV.NS", "HAL.NS", "BEL.NS", "TRENT.NS", "ZOMATO.NS"
+    "COALINDIA.NS", "BAJAJFINSV.NS", "HAL.NS", "BEL.NS", "TRENT.NS", "ZOMATO.NS",
+    "SIEMENS.NS", "ABB.NS", "DLF.NS", "INDIGO.NS", "JSWSTEEL.NS", "HINDALCO.NS",
+    "ONGC.NS", "GRASIM.NS", "TECHM.NS", "ADANIPORTS.NS", "CIPLA.NS", "DRREDDY.NS",
+    "DIVISLAB.NS", "APOLLOHOSP.NS", "EICHERMOT.NS", "BAJAJ-AUTO.NS", "TVSMOTOR.NS", "CHOLAFIN.NS",
+    "SHRIRAMFIN.NS", "PFC.NS", "RECLTD.NS", "VBL.NS", "PIDILITIND.NS", "BRITANNIA.NS",
+    "NESTLEIND.NS", "GODREJCP.NS", "TATAPOWER.NS", "VEDL.NS", "AMBUJACEM.NS", "GAIL.NS"
 ]
 
-# Curated Liquid Mid-Cap Growth & GARP Underdog Universes (Sub-Tab 4B)
+# Curated Liquid Mid-Cap Growth & GARP Underdog Universes (Sub-Tab 4B — 80+ Multi-Sector Gems)
 US_UNDERDOG_UNIVERSE = [
-    "CELH", "DUOL", "ELF", "SOFI", "ROKU", "TOST", "CART", "CAVA", "BILL", "GTLB",
-    "PATH", "APPS", "DOCS", "HALO", "EXEL", "LNTH", "MEDP", "ONTO", "RMBS", "NOVT",
-    "BOOT", "WING", "SHAK", "CROX", "DECK", "ANF", "URBN", "POWL", "MOD", "FIX"
+    # Consumer Growth, Brands & Restaurant Tech
+    "CELH", "DUOL", "ELF", "TOST", "CART", "CAVA", "BOOT", "WING", "SHAK", "CROX",
+    "DECK", "ANF", "URBN", "ONON", "BROS", "BRBR", "SFM", "YETI", "SKX", "EAT",
+    # AI, Cloud, Cyber & Enterprise SaaS
+    "SOFI", "ROKU", "BILL", "GTLB", "PATH", "APPS", "DOCS", "KVYO", "IOT", "MNDY",
+    "ESTC", "CFLT", "S", "DOCN", "FRSH", "APPF", "QLYS", "TENB", "VRNS", "DT",
+    # Semiconductors, Optics, Hardware & Robotics
+    "ONTO", "RMBS", "NOVT", "COHR", "LITE", "LSCC", "SITM", "CAMT", "FORM", "CRUS",
+    "SMTC", "DIOD", "SANM", "FLEX", "FN", "ACLS", "AEIS", "CGNX", "MKSI", "AMBA",
+    # Biotech, MedTech & Diagnostics
+    "HALO", "EXEL", "LNTH", "MEDP", "INSP", "GKOS", "GMED", "PEN", "NTRA", "EXAS",
+    "RVMD", "IONS", "KRYS", "ITCI", "BPMC", "HAE", "MMSI", "TFX", "NEOG", "PRCT",
+    # Industrials, Electrification, Grid & Data Center Cooling
+    "POWL", "MOD", "FIX", "STRL", "DY", "PRIM", "EME", "AAON", "BWXT", "CW",
+    "ENS", "ATKR", "SPXC", "WTS", "TREX", "AZEK", "AWI", "GMS", "BLD", "IBP"
 ]
 
 INDIA_UNDERDOG_UNIVERSE = [
-    "DIXON.NS", "POLYCAB.NS", "PERSISTENT.NS", "COFORGE.NS", "KPITTECH.NS",
-    "FEDERALBNK.NS", "IDFCFIRSTB.NS", "CUMMINSIND.NS", "ASTRAL.NS", "SUZLON.NS",
-    "BHARATFORG.NS", "ASHOKLEY.NS", "AUROPHARMA.NS", "LUPIN.NS", "ALKEM.NS",
-    "MAXHEALTH.NS", "SYNGENE.NS", "PIIND.NS", "DEEPAKNTR.NS", "NAVINFLUOR.NS",
-    "TATACOMM.NS", "TATAELXSI.NS", "SONACOMS.NS", "KEI.NS", "KAYNES.NS",
-    "JYOTICNC.NS", "CGPOWER.NS", "TIINDIA.NS", "VOLTAS.NS", "BLUESTARCO.NS"
+    # EMS, Semiconductors, Defence & Precision Engineering
+    "DIXON.NS", "POLYCAB.NS", "KAYNES.NS", "JYOTICNC.NS", "SYRMA.NS", "AMBER.NS",
+    "PGEL.NS", "DATAPATTNS.NS", "MAZDOCK.NS", "COCHINSHIP.NS", "BDL.NS", "ASTRAMICRO.NS",
+    "CENTUM.NS", "MTARTECH.NS", "PARAS.NS", "ZENTEC.NS", "BEML.NS", "ELECON.NS",
+    # Mid-Cap IT, AI & ER&D Services
+    "PERSISTENT.NS", "COFORGE.NS", "KPITTECH.NS", "TATAELXSI.NS", "TATACOMM.NS", "LTTS.NS",
+    "CYIENT.NS", "MPHASIS.NS", "SONATSOFTW.NS", "BIRLASOFT.NS", "ZENSARTECH.NS", "INTELLECT.NS",
+    "NEWGEN.NS", "LATENTVIEW.NS", "RATEGAIN.NS", "AFFLE.NS", "TANLA.NS", "NETWEB.NS",
+    # Capital Goods, Power Grid, Cables & Industrials
+    "CUMMINSIND.NS", "CGPOWER.NS", "TIINDIA.NS", "KEI.NS", "APARINDS.NS", "TRITURBINE.NS",
+    "THERMAX.NS", "ABB.NS", "BHARATFORG.NS", "SONACOMS.NS", "UNOMINDA.NS", "ENDURANCE.NS",
+    "SCHAEFFLER.NS", "TIMKEN.NS", "SKFINDIA.NS", "CARBORUNIV.NS", "GRINDWELL.NS", "ELGIEQUIP.NS",
+    # Pharma, CDMO, Healthcare & Diagnostics
+    "AUROPHARMA.NS", "LUPIN.NS", "ALKEM.NS", "MAXHEALTH.NS", "SYNGENE.NS", "LAURUSLABS.NS",
+    "SUVENPHAR.NS", "JBCHEPHARM.NS", "AJANTPHARM.NS", "IPCALAB.NS", "NATCOPHARM.NS", "GRANULES.NS",
+    "FORTIS.NS", "NH.NS", "KIMS.NS", "RAINBOW.NS", "LALPATHLAB.NS", "METROPOLIS.NS",
+    # Specialty Chemicals, Consumer Durables & Private Financials
+    "PIIND.NS", "DEEPAKNTR.NS", "NAVINFLUOR.NS", "ASTRAL.NS", "SUPREMEIND.NS", "VOLTAS.NS",
+    "BLUESTARCO.NS", "CROMPTON.NS", "HAVELLS.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS", "KARURVYSYA.NS",
+    "AUROPHARMA.NS", "CHOLAHLDNG.NS", "MCX.NS", "CDSL.NS", "BSE.NS", "ANGELONE.NS"
 ]
+
 
 US_CATALYST_QUERIES = [
     "Wall Street stock upgrade buy rating",

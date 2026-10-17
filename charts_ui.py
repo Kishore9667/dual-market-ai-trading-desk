@@ -256,6 +256,28 @@ def inject_institutional_css() -> None:
             margin-bottom: 12px;
             font-weight: 600;
         }
+        /* Underdog Spotlight Cards (Sub-Tab 4B) */
+        .underdog-card {
+            background: linear-gradient(145deg, #131c31 0%, #0f172a 100%);
+            border: 1px solid #334155;
+            border-left: 5px solid #38bdf8;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+        }
+        .underdog-badge {
+            display: inline-block;
+            background: rgba(56, 189, 248, 0.16);
+            border: 1px solid #38bdf8;
+            color: #e0f2fe !important;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin-top: 6px;
+            margin-bottom: 6px;
+        }
         </style>
         """,
         unsafe_allow_html=True,

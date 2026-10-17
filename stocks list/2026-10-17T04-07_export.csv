@@ -1,0 +1,9 @@
+﻿Ticker,Company Name,Price,Market Cap,Underdog Score,Forward P/E,YoY Rev Growth (%),ROE (%),% Below 52W High,Analyst Upside (%),44-SMA Status,FinBERT Sentiment
+CRGY,Crescent Energy Company,$13.77,$5.4B,94,5.6,55.3,1.5,11,31.1,📈 Rising (Price Above),+40.9 (STRONG)
+MTDR,Matador Resources Company,$57.52,$7.1B,91.4,5.8,26.8,13.6,13.9,21.2,📈 Rising (Price Above),+60.6 (STRONG)
+PAYP,PayPay Corporation - Ameri,$15.68,$10.6B,88,20.8,27,37.3,37,54.2,⚠️ Rising (Price Below),+49.7 (STRONG)
+SM,SM Energy Company,$39.50,$9.4B,82,4.8,176.1,16.1,5,12.8,📈 Rising (Price Above),+7.1 (NEUTRAL)
+AR,Antero Resources Corporati,$38.65,$11.9B,80.4,8.4,12.6,14.2,15.5,27.8,➖ Flat / Sideways,+7.0 (NEUTRAL)
+NOG,"Northern Oil and Gas, Inc.",$27.16,$2.9B,74.9,5.4,16,-22,12.9,14.1,📈 Rising (Price Above),+63.2 (STRONG)
+MUR,Murphy Oil Corporation,$41.74,$6.0B,70,11.4,35.6,6.5,3.7,-0.5,📈 Rising (Price Above),+23.0 (MODERATELY)
+KVYO,"Klaviyo, Inc. Series A",$17.08,$5.1B,66.5,16.2,26.4,0.7,48.8,53.6,📉 Falling (Downtrend),-28.3 (MODERATELY)

@@ -492,6 +492,28 @@ def _build_future_index(last_ts: Any, horizon: int, interval: str) -> List[Any]:
     return future_dates
 
 
+def _statistical_forecast_fallback(
+    df: pd.DataFrame,
+    horizon: int,
+) -> Tuple[List[float], List[float], List[float]]:
+    """
+    Statistical Monte Carlo ATR/volatility projection fallback strictly anchored
+    to the latest closing price float(df['Close'].iloc[-1]).
+    """
+    last_close = float(df["Close"].iloc[-1])
+    close_vals = df["Close"].dropna().astype(float)
+    returns = close_vals.pct_change().dropna()
+    mu = float(returns.tail(60).mean()) if len(returns) > 5 else 0.0005
+    sigma = float(returns.tail(60).std()) if len(returns) > 5 else 0.015
+    steps = np.arange(1, int(horizon) + 1, dtype=float)
+    # Trajectory strictly anchored to last_close = float(df['Close'].iloc[-1])
+    p50_traj = last_close * np.exp(mu * steps)
+    spread = last_close * sigma * np.sqrt(steps) * 1.2816
+    p10_traj = np.maximum(0.01, p50_traj - spread)
+    p90_traj = p50_traj + spread
+    return p10_traj.astype(float).tolist(), p50_traj.astype(float).tolist(), p90_traj.astype(float).tolist()
+
+
 def run_chronos_forecast(
     df: pd.DataFrame,
     horizon: int = 14,
@@ -500,10 +522,10 @@ def run_chronos_forecast(
     keep_on_gpu: bool = False,
 ) -> Dict[str, Any]:
     """
-    Run amazon/chronos-bolt-small on historical Close series to generate
-    10th, 50th (median), and 90th percentile forecasts for the next N bars.
+    Run amazon/chronos-bolt-small on historical Close series using a 1D tensor
+    torch.tensor(df['Close'].dropna().values, dtype=torch.float32) passed into pipeline.predict(),
+    with both Chronos and statistical fallback trajectories anchored to float(df['Close'].iloc[-1]).
     Immediately offloads back to CPU and clears CUDA cache if Smart GPU Relay is active.
-    Includes graceful statistical Monte Carlo ATR fallback if offline.
     """
     if df is None or df.empty:
         return {
@@ -522,8 +544,7 @@ def run_chronos_forecast(
             "engine_used": "None",
         }
 
-    close_series = df["Close"].dropna().astype("float32").values
-    current_price = float(close_series[-1])
+    current_price = float(df["Close"].iloc[-1])
     future_dates = _build_future_index(df.index[-1], horizon, interval)
 
     use_cuda = bool(HAS_TORCH and torch.cuda.is_available() and "CPU Only" not in relay_mode)
@@ -533,39 +554,57 @@ def run_chronos_forecast(
     engine_used = "amazon/chronos-bolt-small (GPU)" if use_cuda else "amazon/chronos-bolt-small (CPU)"
 
     try:
-        pipe = load_chronos_pipeline()
+        pipeline = load_chronos_pipeline()
         if use_cuda:
-            _move_chronos_device(pipe, "cuda:0")
+            _move_chronos_device(pipeline, "cuda:0")
         else:
-            _move_chronos_device(pipe, "cpu")
+            _move_chronos_device(pipeline, "cpu")
 
-        context_tensor = torch.tensor(close_series[-512:], dtype=torch.float32)
-        quantiles, _ = pipe.predict_quantiles(
+        # Pass 1D float32 tensor directly into pipeline.predict()
+        context_tensor = torch.tensor(df["Close"].dropna().values, dtype=torch.float32)
+        forecast = pipeline.predict(
             context_tensor,
             prediction_length=int(horizon),
-            quantile_levels=[0.1, 0.5, 0.9],
         )
-        # quantiles shape: [batch=1, prediction_length, 3]
-        q_np = quantiles[0].detach().cpu().numpy()
-        p10_arr = q_np[:, 0].astype(float).tolist()
-        p50_arr = q_np[:, 1].astype(float).tolist()
-        p90_arr = q_np[:, 2].astype(float).tolist()
+        # forecast shape for ChronosBoltPipeline: [batch=1, num_quantiles=9, prediction_length]
+        # where quantiles are [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        f_np = forecast[0].detach().cpu().numpy().astype(float)
+        q_levels = getattr(pipeline, "quantiles", None)
+        if f_np.ndim == 2 and q_levels is not None and f_np.shape[0] == len(q_levels):
+            q_arr = np.asarray(q_levels, dtype=float)
+            idx_10 = int(np.argmin(np.abs(q_arr - 0.1)))
+            idx_50 = int(np.argmin(np.abs(q_arr - 0.5)))
+            idx_90 = int(np.argmin(np.abs(q_arr - 0.9)))
+            raw_p10 = f_np[idx_10, :]
+            raw_p50 = f_np[idx_50, :]
+            raw_p90 = f_np[idx_90, :]
+        elif f_np.ndim == 2:
+            raw_p10, raw_p50, raw_p90 = np.quantile(f_np, [0.1, 0.5, 0.9], axis=0)
+        else:
+            raw_p50 = f_np.flatten()
+            raw_p10 = raw_p50 * 0.97
+            raw_p90 = raw_p50 * 1.03
+
+        # Anchor the forecast trajectory to the latest closing price float(df['Close'].iloc[-1])
+        # rather than the historical context window mean, preserving Chronos step deltas & cone width
+        lower_spread = np.maximum(0.0, raw_p50 - raw_p10)
+        upper_spread = np.maximum(0.0, raw_p90 - raw_p50)
+        step_drift = (float(raw_p50[-1]) - float(raw_p50[0])) / max(1, int(horizon)) if len(raw_p50) > 1 else 0.0
+        anchored_p50 = current_price + (raw_p50 - float(raw_p50[0])) + step_drift
+        anchored_p10 = np.maximum(0.01, anchored_p50 - lower_spread)
+        anchored_p90 = anchored_p50 + upper_spread
+
+        p10_arr = anchored_p10.astype(float).tolist()
+        p50_arr = anchored_p50.astype(float).tolist()
+        p90_arr = anchored_p90.astype(float).tolist()
 
         if smart_relay and use_cuda:
-            _move_chronos_device(pipe, "cpu")
+            _move_chronos_device(pipeline, "cpu")
             release_pytorch_vram()
     except Exception:
-        # Graceful Statistical Monte Carlo ATR Projection Fallback
+        # Graceful Statistical Monte Carlo ATR Projection Fallback anchored to float(df['Close'].iloc[-1])
         engine_used = "Monte Carlo ATR Projection (Fallback)"
-        returns = pd.Series(close_series).pct_change().dropna()
-        mu = float(returns.tail(60).mean()) if len(returns) > 5 else 0.0005
-        sigma = float(returns.tail(60).std()) if len(returns) > 5 else 0.015
-        steps = np.arange(1, horizon + 1, dtype=float)
-        drift = current_price * np.exp(mu * steps)
-        spread = current_price * sigma * np.sqrt(steps) * 1.2816
-        p50_arr = drift.tolist()
-        p10_arr = np.maximum(0.01, drift - spread).tolist()
-        p90_arr = (drift + spread).tolist()
+        p10_arr, p50_arr, p90_arr = _statistical_forecast_fallback(df, horizon=int(horizon))
 
     end_p10 = float(p10_arr[-1])
     end_p50 = float(p50_arr[-1])

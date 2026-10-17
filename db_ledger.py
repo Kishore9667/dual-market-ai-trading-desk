@@ -1,6 +1,7 @@
 """
-Multi-Currency SQLite Paper Trading & Model Reliability Auditor (Tab 5).
+Multi-Currency SQLite Paper Trading, Persistent Underdog Watchlist & Model Reliability Auditor.
 Maintains isolated US ($100,000 USD) and India (₹10,00,000 INR) virtual portfolios in paper_trading.db,
+stores the persistent saved_watchlist table ('Underdog Gem' or 'Blue-Chip'),
 logs multi-modal paper trades, audits open trades bar-by-bar against live Yahoo Finance data
 for Stop-Loss / Take-Profit / Horizon expiry / Chronos 10%-90% Cone Hit accuracy,
 and computes Equity Curves and Model Calibration statistics.
@@ -27,7 +28,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     """
-    Initialize paper_trading.db with portfolio_config and paper_trades tables,
+    Initialize paper_trading.db with portfolio_config, paper_trades, and saved_watchlist tables,
     seeding separate US ($100,000) and IN (₹10,00,000) portfolios if not present.
     """
     conn = get_connection()
@@ -80,6 +81,25 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS saved_watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            market TEXT,
+            ticker TEXT UNIQUE,
+            company_name TEXT,
+            category TEXT,
+            added_date TEXT,
+            price_at_add REAL,
+            target_price REAL,
+            underdog_score REAL,
+            pe_forward REAL,
+            rev_growth_pct REAL,
+            catalyst_note TEXT
+        )
+        """
+    )
+
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
         """
@@ -100,6 +120,120 @@ def init_db() -> None:
     conn.close()
 
 
+# =====================================================================
+# PERSISTENT SQLITE WATCHLIST CRUD (`saved_watchlist`)
+# =====================================================================
+def add_to_saved_watchlist(
+    market: str,
+    ticker: str,
+    company_name: str,
+    category: str = "Underdog Gem",
+    price_at_add: float = 0.0,
+    target_price: float = 0.0,
+    underdog_score: float = 0.0,
+    pe_forward: float = 0.0,
+    rev_growth_pct: float = 0.0,
+    catalyst_note: str = "",
+) -> Tuple[bool, str]:
+    """Save or update a stock in the persistent SQLite saved_watchlist table."""
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    t_sym = ticker.strip().upper()
+
+    cur.execute(
+        """
+        INSERT INTO saved_watchlist (
+            market, ticker, company_name, category, added_date,
+            price_at_add, target_price, underdog_score, pe_forward, rev_growth_pct, catalyst_note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker) DO UPDATE SET
+            market = excluded.market,
+            company_name = excluded.company_name,
+            category = excluded.category,
+            added_date = excluded.added_date,
+            price_at_add = excluded.price_at_add,
+            target_price = excluded.target_price,
+            underdog_score = excluded.underdog_score,
+            pe_forward = excluded.pe_forward,
+            rev_growth_pct = excluded.rev_growth_pct,
+            catalyst_note = excluded.catalyst_note
+        """,
+        (
+            market,
+            t_sym,
+            company_name,
+            category,
+            now_str,
+            round(float(price_at_add or 0.0), 2),
+            round(float(target_price or 0.0), 2),
+            round(float(underdog_score or 0.0), 1),
+            round(float(pe_forward or 0.0), 1),
+            round(float(rev_growth_pct or 0.0), 1),
+            catalyst_note,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return True, f"⭐ Saved `{t_sym}` ({company_name}) to `{market}` {category} Watchlist!"
+
+
+def remove_from_saved_watchlist(ticker: str) -> Tuple[bool, str]:
+    """Remove a ticker from the persistent SQLite saved_watchlist table."""
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    t_sym = ticker.strip().upper()
+    cur.execute("DELETE FROM saved_watchlist WHERE ticker = ?", (t_sym,))
+    conn.commit()
+    conn.close()
+    return True, f"Removed `{t_sym}` from Saved Watchlist."
+
+
+def get_saved_watchlist(market_code: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieve saved watchlist rows for the specified market (or all markets if None)."""
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    if market_code and market_code in ("US", "IN"):
+        cur.execute(
+            "SELECT * FROM saved_watchlist WHERE market = ? ORDER BY underdog_score DESC, id DESC",
+            (market_code,),
+        )
+    else:
+        cur.execute("SELECT * FROM saved_watchlist ORDER BY underdog_score DESC, id DESC")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_watchlist_live_quote(ticker: str, fallback_price: float) -> Tuple[float, float]:
+    """
+    Fetch fast latest price for a saved watchlist item and compute % gain/loss since price_at_add.
+    Returns (live_price, pct_gain_since_add).
+    """
+    live_p = float(fallback_price or 0.0)
+    try:
+        t_obj = yf.Ticker(ticker)
+        fast_info = getattr(t_obj, "fast_info", None)
+        if fast_info and getattr(fast_info, "last_price", None):
+            live_p = float(fast_info.last_price)
+        else:
+            df = fetch_ohlcv(ticker, interval="1d", period="5d")
+            if not df.empty:
+                live_p = float(df["Close"].iloc[-1])
+    except Exception:
+        pass
+
+    base_p = float(fallback_price or live_p)
+    pct_gain = (((live_p - base_p) / base_p) * 100.0) if base_p > 0 else 0.0
+    return round(live_p, 2), round(pct_gain, 2)
+
+
+# =====================================================================
+# PORTFOLIO & PAPER TRADES LEDGER CRUD
+# =====================================================================
 def get_portfolio_config(market_code: str = "US") -> Dict[str, Any]:
     init_db()
     conn = get_connection()
@@ -271,7 +405,6 @@ def manual_close_trade(trade_id: int) -> Tuple[bool, str]:
         (round(live_price, 2), now_str, round(pnl_d, 2), round(pnl_pct, 2), cone_hit, int(trade_id)),
     )
 
-    # Return original notional + realized PnL to portfolio current_cash
     proceeds = (entry_price * shares) + pnl_d
     cur.execute(
         "UPDATE portfolio_config SET current_cash = current_cash + ?, updated_at = ? WHERE market = ?",
@@ -410,7 +543,6 @@ def sync_and_audit_open_trades(market_code: Optional[str] = None) -> Dict[str, A
                 (proceeds, now_str, market),
             )
         else:
-            # Even for OPEN trades, check if current price is currently tracking inside the Chronos cone
             if p10 > 0 and p90 > 0:
                 cone_hit = 1 if (p10 <= exit_p <= p90) else 0
 
@@ -459,7 +591,6 @@ def compute_reliability_metrics(
     market_df = get_trades_df(market_code)
     calib_df = get_trades_df(None if combined_calibration else market_code)
 
-    # Calculate open position market value in active market
     open_market_val = 0.0
     unrealized_pnl = 0.0
     realized_pnl = 0.0
@@ -478,8 +609,6 @@ def compute_reliability_metrics(
     total_equity = current_cash + open_market_val
     total_return_pct = ((total_equity - starting_cash) / starting_cash * 100.0) if starting_cash else 0.0
 
-    # Evaluate Win Rate, Profit Factor, Cone Hit Rate, and 44-SMA Win Rate on calibration dataset
-    # Include both closed trades and audited trades with non-zero PnL
     if not calib_df.empty:
         eval_df = calib_df.copy()
         wins = eval_df[eval_df["pnl_dollars"] > 0]
@@ -513,7 +642,6 @@ def compute_reliability_metrics(
         cone_hit_rate = 0.0
         sma44_win_rate = 0.0
 
-    # Build Virtual Equity Curve points for active market
     equity_curve = [{"Step": "Initial Seed", "Timestamp": port["updated_at"][:10], "Equity": starting_cash}]
     if not market_df.empty:
         chronological = market_df.sort_values("id", ascending=True)
@@ -528,7 +656,6 @@ def compute_reliability_metrics(
                 }
             )
 
-    # Build Model Calibration Buckets (0-40, 40-60, 60-75, 75-100) + Math & FinBERT Agreement vs Divergence
     buckets = [
         ("Conviction 0-40", 0.0, 40.0),
         ("Conviction 40-60", 40.0, 60.0),
@@ -547,7 +674,6 @@ def compute_reliability_metrics(
             wr, cnt = 0.0, 0
         calibration_bars.append({"Bucket": label, "Win Rate (%)": round(wr, 1), "Trades": cnt, "Group": "Conviction Tier"})
 
-    # Math + FinBERT Agreed vs Diverged
     if not calib_df.empty:
         math_bull = (0.64 * calib_df["ta_score"] + 0.36 * calib_df["chronos_score"]) >= 52.0
         news_bull = calib_df["finbert_score"] >= 52.0

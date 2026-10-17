@@ -1,7 +1,8 @@
 """
 Dual-Market Configuration & Safeguards (US NYSE/NASDAQ & India NSE/BSE).
 Handles currency symbols, benchmarks, watchlists, smart Indian ticker normalization,
-Google News RSS templates, Yahoo Finance interval/lookback caps, and institutional discovery universes.
+Google News RSS templates, Yahoo Finance interval/lookback caps,
+Institutional Blue-Chip Universes, and Valuable Underdog (Mid-Cap GARP) Universes.
 """
 
 import re
@@ -37,6 +38,22 @@ INDIA_DISCOVERY_UNIVERSE = [
     "COALINDIA.NS", "BAJAJFINSV.NS", "HAL.NS", "BEL.NS", "TRENT.NS", "ZOMATO.NS"
 ]
 
+# Curated Liquid Mid-Cap Growth & GARP Underdog Universes (Sub-Tab 4B)
+US_UNDERDOG_UNIVERSE = [
+    "CELH", "DUOL", "ELF", "SOFI", "ROKU", "TOST", "CART", "CAVA", "BILL", "GTLB",
+    "PATH", "APPS", "DOCS", "HALO", "EXEL", "LNTH", "MEDP", "ONTO", "RMBS", "NOVT",
+    "BOOT", "WING", "SHAK", "CROX", "DECK", "ANF", "URBN", "POWL", "MOD", "FIX"
+]
+
+INDIA_UNDERDOG_UNIVERSE = [
+    "DIXON.NS", "POLYCAB.NS", "PERSISTENT.NS", "COFORGE.NS", "KPITTECH.NS",
+    "FEDERALBNK.NS", "IDFCFIRSTB.NS", "CUMMINSIND.NS", "ASTRAL.NS", "SUZLON.NS",
+    "BHARATFORG.NS", "ASHOKLEY.NS", "AUROPHARMA.NS", "LUPIN.NS", "ALKEM.NS",
+    "MAXHEALTH.NS", "SYNGENE.NS", "PIIND.NS", "DEEPAKNTR.NS", "NAVINFLUOR.NS",
+    "TATACOMM.NS", "TATAELXSI.NS", "SONACOMS.NS", "KEI.NS", "KAYNES.NS",
+    "JYOTICNC.NS", "CGPOWER.NS", "TIINDIA.NS", "VOLTAS.NS", "BLUESTARCO.NS"
+]
+
 US_CATALYST_QUERIES = [
     "Wall Street stock upgrade buy rating",
     "S&P 500 stock earnings beat guidance raised",
@@ -48,6 +65,17 @@ INDIA_CATALYST_QUERIES = [
     "Nifty stock buy target",
     "Q2 Q3 earnings beat India"
 ]
+
+# Trusted Financial Media RSS Queries for Sub-Tab 4B (Valuable Underdogs)
+US_UNDERDOG_RSS_QUERY = (
+    'site:barrons.com OR site:reuters.com OR site:zacks.com OR site:nasdaq.com '
+    '("initiated with a buy" OR "undervalued growth" OR "mid-cap" OR "strong buy upgrade")'
+)
+
+INDIA_UNDERDOG_RSS_QUERY = (
+    'site:economictimes.indiatimes.com OR site:moneycontrol.com OR site:livemint.com OR site:business-standard.com '
+    '("midcap pick" OR "initiate coverage buy" OR "undervalued" OR "Nifty Midcap")'
+)
 
 INTERVAL_LOOKBACK_MAP: Dict[str, Dict[str, Any]] = {
     "15m": {
@@ -91,17 +119,27 @@ def get_market_config(market_label: str, indian_suffix: str = ".NS") -> Dict[str
             "supports_prepost": True,
             "allowed_exchanges": ["NYQ", "NMS", "NGM", "PCX", "NASDAQ", "NYSE"],
             "discovery_universe": US_DISCOVERY_UNIVERSE,
+            "underdog_universe": US_UNDERDOG_UNIVERSE,
             "catalyst_queries": US_CATALYST_QUERIES,
+            "underdog_rss_query": US_UNDERDOG_RSS_QUERY,
+            # Blue-chip defaults (Sub-Tab 4A)
             "min_mcap_default": 10.0,   # $10 Billion
             "min_mcap_min": 2.0,        # $2 Billion
             "min_mcap_max": 100.0,      # $100 Billion
             "min_price_default": 20.0,
             "min_vol_default": 1_500_000,
             "min_analysts_default": 5,
+            # Underdog Sweet-Spot defaults (Sub-Tab 4B)
+            "ud_mcap_min_limit": 0.5,
+            "ud_mcap_max_limit": 50.0,
+            "ud_mcap_default_range": (1.5, 15.0),  # $1.5B to $15.0B
+            "ud_min_price_default": 12.0,
+            "ud_min_vol_default": 500_000,
+            "ud_min_growth_default": 15.0,
+            "ud_max_fpe_default": 28.0,
             "indian_suffix": indian_suffix,
         }
     else:
-        # Adapt default watchlist suffix if user selects .BO instead of .NS
         watchlist = []
         for t in INDIA_WATCHLIST:
             if t.startswith("^"):
@@ -123,13 +161,24 @@ def get_market_config(market_label: str, indian_suffix: str = ".NS") -> Dict[str
             "supports_prepost": False,
             "allowed_exchanges": ["NSI", "BSE"],
             "discovery_universe": INDIA_DISCOVERY_UNIVERSE,
+            "underdog_universe": INDIA_UNDERDOG_UNIVERSE,
             "catalyst_queries": INDIA_CATALYST_QUERIES,
+            "underdog_rss_query": INDIA_UNDERDOG_RSS_QUERY,
+            # Blue-chip defaults (Sub-Tab 4A)
             "min_mcap_default": 20000,   # ₹20,000 Crores
             "min_mcap_min": 5000,        # ₹5,000 Crores
             "min_mcap_max": 100000,      # ₹1,00,000 Crores
             "min_price_default": 100.0,
             "min_vol_default": 1_000_000,
             "min_analysts_default": 3,
+            # Underdog Sweet-Spot defaults (Sub-Tab 4B)
+            "ud_mcap_min_limit": 1000,
+            "ud_mcap_max_limit": 100000,
+            "ud_mcap_default_range": (3000, 35000),  # ₹3,000 Cr to ₹35,000 Cr
+            "ud_min_price_default": 80.0,
+            "ud_min_vol_default": 300_000,
+            "ud_min_growth_default": 15.0,
+            "ud_max_fpe_default": 32.0,
             "indian_suffix": indian_suffix,
         }
 
